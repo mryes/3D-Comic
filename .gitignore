@@ -1,0 +1,8 @@
+*.vsp
+*.vcxproj*
+*.pdb
+*.py
+bin/
+debug/
+obj/
+res/
