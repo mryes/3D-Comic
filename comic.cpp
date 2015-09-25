@@ -1,119 +1,13 @@
-#include <iostream>
-#include <string>
-#include <vector>
-#include <array>
-#include <fstream>
-#include <sstream>
-#include <functional>
-#include <map>
-#include <cctype>
-#include <cassert>
-#define GLEW_STATIC
-#include <GL/glew.h>
-#include <SDL.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <glm/gtc/constants.hpp>
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
+#include <comic.hpp>
 
-template <typename T>
-struct Result
-{
-    T obj;
-    bool success = true;
-    std::string error = "";
-};
+static bool context_active = false;
 
-template<typename T>
-Result<T> errorResult(std::string error)
+bool isContextActive()
 {
-    Result<T> result;
-    result.success = false;
-    result.error = error;
-    return result;
+    return context_active;
 }
 
-template<typename T>
-Result<T> successfulResult(T obj)
-{
-    Result<T> result;
-    result.obj = std::move(obj);
-    return result;
-}
-
-enum MeshLayout
-{
-    NONE = 0,
-    POS = 1 << 0,
-    TEX = 1 << 1,
-    NORM = 1 << 2,
-};
-
-struct MeshData
-{
-    std::vector<GLfloat> vertices;
-    std::vector<GLuint> indices;
-    std::vector<int> material_indices;
-    std::vector<std::string> materials;
-    char layout;
-};
-
-struct Mesh
-{
-    GLuint vao = 0, vbo = 0, ibo = 0;
-    int num_vertices = 0;
-    char layout = MeshLayout::NONE;
-
-    Mesh(MeshData& mesh_data);
-
-    Mesh(const Mesh &other) = delete;
-    Mesh& operator=(const Mesh &other) = delete;
-
-    Mesh(Mesh &&other)
-    {
-        vao = other.vao;
-        other.vao = 0;
-    }
-
-    Mesh &operator=(Mesh &&other)
-    {
-        vao = other.vao;
-        other.vao = 0;
-        return *this;
-    }
-
-    ~Mesh();
-};
-
-struct Shader
-{
-    GLuint id;
-    GLuint vertex;
-    GLuint fragment;
-
-    Shader() : id(0), vertex(0), fragment(0) {}
-
-    Shader(const Shader&other) = delete;
-    Shader& operator=(const Shader &other) = delete;
-
-    Shader(Shader &&other)
-    {
-        id = other.id;
-        other.id = 0;
-    }
-
-    Shader &operator=(Shader &&other)
-    {
-        id = other.id;
-        other.id = 0;
-        return *this;
-    }
-
-    ~Shader();
-};
-
+using std::unique_ptr;
 std::string loadFile(std::string fileName)
 {
     auto fileStream = std::ifstream(fileName);
@@ -210,7 +104,8 @@ Mesh::Mesh(MeshData &mesh_data)
 
 Mesh::~Mesh()
 {
-    if (!SDL_GL_GetCurrentContext()) return;
+    if (!isContextActive()) return;
+    std::cout << "What!\n";
     if (vao == 0 || vbo == 0 || ibo == 0) return;
     glDeleteVertexArrays(1, &vao);
     glDeleteBuffers(1, &vbo);
@@ -230,8 +125,7 @@ Result<MeshData> loadOBJ(std::string obj_text_contents)
         {
             auto num_begin = loc;
             auto num_end = loc;
-            while (num_end != param.end() && std::isdigit(*num_end))
-                num_end++;
+            while (num_end != param.end() && std::isdigit(*num_end)) num_end++;
             if (num_end != param.end() && !contains("/ \t\n", *num_end)) break;
             if (num_begin != num_end) // index wasn't skipped here
             {
@@ -284,8 +178,7 @@ Result<MeshData> loadOBJ(std::string obj_text_contents)
         auto loc = linebuf.begin();
         std::string keyword;
         std::tie(keyword, loc) = parseToken(loc, linebuf.end());
-        if (keyword == "#") continue;
-        else if (keyword == "v" || keyword == "vt" || keyword == "vn")
+        if (keyword == "v" || keyword == "vt" || keyword == "vn")
         {
             int params_found = 0;
             while (loc != linebuf.end())
@@ -460,15 +353,63 @@ Result<Shader> makeShader(std::string vertex_src, std::string fragment_src)
     return result;
 }
 
+void initTransformationMatrices(Shader &shader)
+{
+    shader._model = glGetUniformLocation(shader.id, "model");
+    shader._view = glGetUniformLocation(shader.id, "view");
+    shader._projection = glGetUniformLocation(shader.id, "projection");
+}
+
+void setModelTransform(Shader &shader, glm::mat4 &mat)
+{
+    glUniformMatrix4fv(shader._model, 1, GL_FALSE, glm::value_ptr(mat));
+}
+
+void setCameraTransform(Shader &shader, glm::mat4 &mat)
+{
+    glUniformMatrix4fv(shader._view, 1, GL_FALSE, glm::value_ptr(mat));
+}
+
+void setProjectionTransform(Shader &shader, glm::mat4 mat)
+{
+    glUniformMatrix4fv(shader._projection, 1, GL_FALSE, glm::value_ptr(mat));
+}
+
 Shader::~Shader()
 {
-    if (!SDL_GL_GetCurrentContext()) return;
+    if (!isContextActive()) return;
     if (!id) return;
     glDetachShader(id, vertex);
     glDetachShader(id, fragment);
     glDeleteShader(vertex);
     glDeleteShader(fragment);
     glDeleteProgram(id);
+}
+
+Image::Image(const char *filename)
+{
+    int img_channels;
+    std::string full_path = IMAGE_DIR;
+    full_path += filename;
+    data = stbi_load(full_path.data(), &width, &height, &img_channels, 3);
+}
+
+Texture::Texture(Image &image)
+{
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); 
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, image.width, image.height, 0, GL_RGB, GL_UNSIGNED_BYTE, image.data);
+}
+
+Texture::~Texture()
+{
+    if (!isContextActive()) return;
+    if (!id) return;
+    glDeleteTextures(1, &id);
 }
 
 void debugPrintMesh(MeshData &mesh)
@@ -501,6 +442,8 @@ int main(int argc, char *argv[])
     }
     MeshData mesh_data = parseObjResult.obj;
 
+    auto image = Image{"skull.png"};
+
     int screen_width = 1200; 
     int screen_height = 800;
 
@@ -526,7 +469,9 @@ int main(int argc, char *argv[])
         std::cerr << "SDL error: " << SDL_GetError() << "\n";
         return EXIT_FAILURE;
     }
+    context_active = true;
     SDL_ShowCursor(0);
+
     glewExperimental = GL_TRUE;
     GLenum initStatus = glewInit();
     if (initStatus != GLEW_OK)
@@ -537,8 +482,9 @@ int main(int argc, char *argv[])
     GLenum error = glGetError();
     if (error != GL_NO_ERROR)
         std::cerr << "OpenGL error: " << gluErrorString(error) << "\n";
+
     glEnable(GL_DEPTH_TEST);
-    //glEnable(GL_CULL_FACE);
+    // glEnable(GL_CULL_FACE);
 
     Shader shader;
     {
@@ -550,24 +496,15 @@ int main(int argc, char *argv[])
         }
         shader = std::move(shaderResult.obj);
     }
-    GLint view_projection_loc = glGetUniformLocation(shader.id, "view_projection");
+    initTransformationMatrices(shader);
     GLint texture_loc = glGetUniformLocation(shader.id, "tex");
 
     Mesh mesh {mesh_data};
 
-    int img_width, img_height, img_channels;
-    GLubyte *image_data = stbi_load("res/images/skull.png", &img_width, &img_height, &img_channels, 3);
-    GLuint texture;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); 
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, img_width, img_height, 0, GL_RGB, GL_UNSIGNED_BYTE, image_data);
+    auto texture = Texture{image};
 
-    float cube_rotation = 0;
-    float cube_rotation_speed = 1.0;
+    float rotation = 0;
+    float rotation_speed = 2.f;
     float z_position = -5;
     float x_position = 0;
     float previous_time = SDL_GetTicks() / 1000.f;
@@ -589,8 +526,7 @@ int main(int argc, char *argv[])
                 auto key = event.key.keysym.sym;
                 if (key == SDLK_w)
                     wireframe = !wireframe;
-                else if (key == SDLK_ESCAPE)
-                    return EXIT_SUCCESS;
+                else if (key == SDLK_ESCAPE) break;
             }
         }
 
@@ -598,7 +534,7 @@ int main(int argc, char *argv[])
         dt = now - previous_time;
         previous_time = now;
 
-        cube_rotation += cube_rotation_speed * dt;
+        rotation += rotation_speed * dt;
 
         glClearColor(0.f, 0.f, 0.f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -606,14 +542,15 @@ int main(int argc, char *argv[])
 
         glUseProgram(shader.id);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, texture);
+        glBindTexture(GL_TEXTURE_2D, texture.id);
         glUniform1i(texture_loc, 0);
-        glm::mat4 projection = glm::perspective(45.f, (float)screen_width / screen_height, 0.1f, 100.f);
-        glm::mat4 view = glm::translate(glm::mat4(1.0f), glm::vec3(x_position, -2.f, z_position));
-        view = glm::scale(view, glm::vec3(0.02f, 0.02f, 0.02f));
-        view = glm::rotate(view, cube_rotation, glm::vec3(0.f, /*glm::sin(SDL_GetTicks()/1000.f)*/ 1.f, 0.f));
-        glm::mat4 view_projection = projection*view;
-        glUniformMatrix4fv(view_projection_loc, 1, GL_FALSE, glm::value_ptr(view_projection));
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(x_position, -0.7f, z_position));
+        model = glm::scale(model, glm::vec3(0.02f, 0.02f, 0.02f));
+        model = glm::rotate(model, (float)3.14159/5, glm::vec3(1.f, 0.f, 0.f));
+        model = glm::rotate(model, rotation, glm::vec3(0.f, 1.f, 0.f));
+        setModelTransform(shader, model);
+        setCameraTransform(shader, glm::lookAt(glm::vec3(0.f, 0.f, 2.f), glm::vec3(0.f, 0.f, 1.f), glm::vec3(0.f, 1.f, 0.f)));
+        setProjectionTransform(shader, glm::perspective(45.f, (float)screen_width / screen_height, 0.1f, 100.f));
         draw(mesh);
 
         SDL_GL_SwapWindow(window);
@@ -626,6 +563,7 @@ int main(int argc, char *argv[])
         }
     }
 
+    context_active = false;
     SDL_GL_DeleteContext(context);
     SDL_Quit();
     return 0;
