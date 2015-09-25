@@ -17,7 +17,6 @@
 #include <glm/gtc/constants.hpp>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
-#include "main.h"
 
 template <typename T>
 struct Result
@@ -64,7 +63,8 @@ struct MeshData
 struct Mesh
 {
     GLuint vao = 0, vbo = 0, ibo = 0;
-    char layout;
+    int num_vertices = 0;
+    char layout = MeshLayout::NONE;
 
     Mesh(MeshData& mesh_data);
 
@@ -160,15 +160,6 @@ void do_times(int times, std::function<void(int)> function)
     for (int i = 0; i < times; i++) function(i);
 }
 
-Mesh::~Mesh()
-{
-    if (!SDL_GL_GetCurrentContext()) return;
-    if (vao == 0 || vbo == 0 || ibo == 0) return;
-    glDeleteVertexArrays(1, &vao);
-    glDeleteBuffers(1, &vbo);
-    glDeleteBuffers(1, &ibo);
-}
-
 GLsizei vertexStride(MeshData& mesh)
 {
     if (mesh.layout == MeshLayout::NONE) return 0;
@@ -182,6 +173,7 @@ GLsizei vertexStride(MeshData& mesh)
 Mesh::Mesh(MeshData &mesh_data)
 {
     layout = mesh_data.layout;
+    num_vertices = static_cast<int>(mesh_data.indices.size());
     glGenVertexArrays(1, &vao);
     glBindVertexArray(vao);
     glGenBuffers(1, &vbo);
@@ -214,6 +206,15 @@ Mesh::Mesh(MeshData &mesh_data)
         &mesh_data.indices[0],
         GL_STATIC_DRAW);
     glBindVertexArray(0);
+}
+
+Mesh::~Mesh()
+{
+    if (!SDL_GL_GetCurrentContext()) return;
+    if (vao == 0 || vbo == 0 || ibo == 0) return;
+    glDeleteVertexArrays(1, &vao);
+    glDeleteBuffers(1, &vbo);
+    glDeleteBuffers(1, &ibo);
 }
 
 Result<MeshData> loadOBJ(std::string obj_text_contents)
@@ -386,6 +387,12 @@ Result<MeshData> loadOBJ(std::string obj_text_contents)
     return successfulResult(std::move(mesh));
 }
 
+void draw(Mesh &mesh)
+{
+    glBindVertexArray(mesh.vao);
+    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(mesh.num_vertices), GL_UNSIGNED_INT, 0);
+}
+
 void quickPrintOpenGLError(int lineNum)
 {
     GLenum error;
@@ -486,7 +493,7 @@ void debugPrintMesh(MeshData &mesh)
 
 int main(int argc, char *argv[])
 {
-    auto parseObjResult = loadOBJ(loadFile("res/models/tree.obj"));
+    auto parseObjResult = loadOBJ(loadFile("res/models/skull.obj"));
     if (!parseObjResult.success)
     {
         std::cerr << parseObjResult.error << "\n";
@@ -549,7 +556,7 @@ int main(int argc, char *argv[])
     Mesh mesh {mesh_data};
 
     int img_width, img_height, img_channels;
-    GLubyte *image_data = stbi_load("res/images/tree.png", &img_width, &img_height, &img_channels, 3);
+    GLubyte *image_data = stbi_load("res/images/skull.png", &img_width, &img_height, &img_channels, 3);
     GLuint texture;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
@@ -577,8 +584,14 @@ int main(int argc, char *argv[])
                 z_position = ((float)event.motion.y / screen_height) * -90;
                 x_position = (event.motion.x - screen_width/2) / 50.f;
             }
-            else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_w)
-                wireframe = !wireframe;
+            else if (event.type == SDL_KEYDOWN)
+            {
+                auto key = event.key.keysym.sym;
+                if (key == SDLK_w)
+                    wireframe = !wireframe;
+                else if (key == SDLK_ESCAPE)
+                    return EXIT_SUCCESS;
+            }
         }
 
         float now = SDL_GetTicks() / 1000.f;
@@ -590,18 +603,19 @@ int main(int argc, char *argv[])
         glClearColor(0.f, 0.f, 0.f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
+
         glUseProgram(shader.id);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
         glUniform1i(texture_loc, 0);
         glm::mat4 projection = glm::perspective(45.f, (float)screen_width / screen_height, 0.1f, 100.f);
-        glm::mat4 view = glm::translate(glm::mat4(1.0f), glm::vec3(x_position, -0.5f, z_position));
-        view = glm::scale(view, glm::vec3(0.2f, 0.2f, 0.2f));
+        glm::mat4 view = glm::translate(glm::mat4(1.0f), glm::vec3(x_position, -2.f, z_position));
+        view = glm::scale(view, glm::vec3(0.02f, 0.02f, 0.02f));
         view = glm::rotate(view, cube_rotation, glm::vec3(0.f, /*glm::sin(SDL_GetTicks()/1000.f)*/ 1.f, 0.f));
         glm::mat4 view_projection = projection*view;
         glUniformMatrix4fv(view_projection_loc, 1, GL_FALSE, glm::value_ptr(view_projection));
-        glBindVertexArray(mesh.vao);
-        glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(mesh_data.indices.size()), GL_UNSIGNED_INT, 0);
+        draw(mesh);
+
         SDL_GL_SwapWindow(window);
 
         GLenum error = glGetError();
