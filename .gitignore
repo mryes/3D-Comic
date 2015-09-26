@@ -2,6 +2,7 @@
 *.vcxproj*
 *.pdb
 *.py
+*.dll
 bin/
 debug/
 obj/
