@@ -60,8 +60,6 @@ struct MeshData
 {
     std::vector<GLfloat> vertices;
     std::vector<GLuint> indices;
-    std::vector<int> material_indices;
-    std::vector<std::string> materials;
     char layout;
 };
 
@@ -135,8 +133,6 @@ private:
         other.fragment = 0;
     }
 };
-
-void imageDeleter(unsigned char *bytes);
 
 struct Image
 {

@@ -200,14 +200,6 @@ Result<MeshData> loadOBJ(std::string obj_text_contents)
             else if (keyword == "vt" && params_found != 2)
                 return errorResult<MeshData>("Texture coordinates need 2 parameters");
         }
-        else if (keyword == "usematl")
-        {
-            std::string param;
-            tie(param, loc) = parseToken(loc, linebuf.end());
-            if (param.empty()) continue;
-            mesh.materials.push_back(param);
-            cur_material = param;
-        }
         else if (keyword == "f")
         {
             int face_indices = 0;
@@ -269,11 +261,6 @@ Result<MeshData> loadOBJ(std::string obj_text_contents)
             }
             if (face_indices < 3)
                 return errorResult<MeshData>("Faces must have at least 3 vertices");
-            // Material index is just index into material vector
-            mesh.material_indices.push_back(
-                static_cast<int>(
-                    find(mesh.materials, cur_material)
-                    - mesh.materials.begin()));
         }
     }
 
