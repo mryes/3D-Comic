@@ -54,7 +54,7 @@ void do_times(int times, std::function<void(int)> function)
     for (int i = 0; i < times; i++) function(i);
 }
 
-GLsizei vertexStride(MeshData& mesh)
+GLsizei vertexStride(const MeshData &mesh)
 {
     if (mesh.layout == MeshLayout::NONE) return 0;
     assert(mesh.layout & MeshLayout::POS);
@@ -64,7 +64,17 @@ GLsizei vertexStride(MeshData& mesh)
     return size;
 }
 
-Mesh::Mesh(MeshData &mesh_data)
+/*int indexStride(const MeshData &mesh)
+{
+    if (mesh.layout == MeshLayout::NONE) return 0;
+    assert(mesh.layout & MeshLayout::POS);
+    GLsizei size = 3;
+    if (mesh.layout & MeshLayout::TEX)  size += 2;
+    if (mesh.layout & MeshLayout::NORM) size += 3;
+    return size;
+}*/
+
+Mesh::Mesh(const MeshData &mesh_data)
 {
     layout = mesh_data.layout;
     num_vertices = static_cast<int>(mesh_data.indices.size());
@@ -112,7 +122,27 @@ Mesh::~Mesh()
     glDeleteBuffers(1, &ibo);
 }
 
-Result<MeshData> loadOBJ(std::string obj_text_contents)
+const MeshData QUAD_MESH_DATA
+{
+    // Vertices
+    {
+         1,  1, 0,   1, 1,
+         1, -1, 0,   1, 0,
+        -1, -1, 0,   0, 0,
+        -1,  1, 0,   0, 1
+    },
+    // Indices
+    {
+        0, 3, 1,
+        1, 3, 2
+    },
+
+    POS | TEX
+};
+
+Result<MeshData> loadOBJ(
+    std::string obj_text_contents,
+    MeshPrimitiveType load_mode = MeshPrimitiveType::TRIANGLES)
 {
     // Parse the format X/X/X or X//X or X etc.
     auto indicesSplit = [](std::string param)
@@ -162,6 +192,7 @@ Result<MeshData> loadOBJ(std::string obj_text_contents)
 
     MeshData mesh;
     mesh.layout = MeshLayout::NONE;
+    mesh.primitive_type = load_mode;
 
     std::vector<float> obj_positions;
     std::vector<float> obj_texcoords;
@@ -248,15 +279,32 @@ Result<MeshData> loadOBJ(std::string obj_text_contents)
                 }
                 int cur_index = index_combos_seen_before[index_combo];
                 face_indices++;
-                if (face_indices <= 3) mesh.indices.push_back(cur_index);
-                else 
+                if (load_mode == MeshPrimitiveType::TRIANGLES)
                 {
-                    // Need to continue triangle fan 
-                    std::array<int, 3> new_tri;
-                    new_tri[0] = *(mesh.indices.end() - 3);
-                    new_tri[1] = *(mesh.indices.end() - 1);
-                    new_tri[2] = cur_index;
-                    for (int i : new_tri) mesh.indices.push_back(i);
+                    if (face_indices <= 3) mesh.indices.push_back(cur_index);
+                    else
+                    {
+                        // Need to continue triangle fan 
+                        std::array<int, 3> new_tri;
+                        new_tri[0] = *(mesh.indices.end() - 3);
+                        new_tri[1] = *(mesh.indices.end() - 1);
+                        new_tri[2] = cur_index;
+                        for (int i : new_tri) mesh.indices.push_back(i);
+                    }
+                }
+                else // line segments
+                {
+                    if (face_indices > 2)
+                    {
+                        mesh.indices.push_back(*(mesh.indices.end() - 1));
+                        mesh.indices.push_back(cur_index);
+                    }
+                    if (loc == linebuf.end())
+                    {
+                        // Close polygon
+                        mesh.indices.push_back(*(mesh.indices.end() - 1));
+                        mesh.indices.push_back(*(mesh.indices.end() - face_indices));
+                    }
                 }
             }
             if (face_indices < 3)
@@ -267,10 +315,22 @@ Result<MeshData> loadOBJ(std::string obj_text_contents)
     return successfulResult(std::move(mesh));
 }
 
-void draw(Mesh &mesh)
+void draw(const Mesh &mesh)
 {
     glBindVertexArray(mesh.vao);
     glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(mesh.num_vertices), GL_UNSIGNED_INT, 0);
+}
+
+void bind(const Texture &texture)
+{
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture.id);
+}
+
+void draw(const Mesh &mesh, const Texture &texture)
+{
+    bind(texture);
+    draw(mesh);
 }
 
 void quickPrintOpenGLError(int lineNum)
@@ -340,6 +400,11 @@ Result<Shader> makeShader(std::string vertex_src, std::string fragment_src)
     return result;
 }
 
+void use(const Shader &shader)
+{
+    glUseProgram(shader.id);
+}
+
 void initTransformationMatrices(Shader &shader)
 {
     shader._model = glGetUniformLocation(shader.id, "model");
@@ -347,19 +412,26 @@ void initTransformationMatrices(Shader &shader)
     shader._projection = glGetUniformLocation(shader.id, "projection");
 }
 
-void setModelTransform(Shader &shader, glm::mat4 &mat)
+void setModelTransform(const Shader &shader, glm::mat4 &mat)
 {
     glUniformMatrix4fv(shader._model, 1, GL_FALSE, glm::value_ptr(mat));
 }
 
-void setCameraTransform(Shader &shader, glm::mat4 &mat)
+void setCameraTransform(const Shader &shader, glm::mat4 &mat)
 {
     glUniformMatrix4fv(shader._view, 1, GL_FALSE, glm::value_ptr(mat));
 }
 
-void setProjectionTransform(Shader &shader, glm::mat4 mat)
+void setProjectionTransform(const Shader &shader, glm::mat4 mat)
 {
     glUniformMatrix4fv(shader._projection, 1, GL_FALSE, glm::value_ptr(mat));
+}
+
+void setHasTexture(Shader &shader)
+{
+    GLint texture_loc = glGetUniformLocation(shader.id, "tex");
+    use(shader);
+    glUniform1i(texture_loc, 0);
 }
 
 Shader::~Shader()
@@ -375,13 +447,12 @@ Shader::~Shader()
 
 Image::Image(const char *filename)
 {
-    int img_channels;
     std::string full_path = IMAGE_DIR;
     full_path += filename;
-    data = stbi_load(full_path.data(), &width, &height, &img_channels, 3);
+    data = stbi_load(full_path.data(), &width, &height, &channels, 4);
 }
 
-Texture::Texture(Image &image)
+Texture::Texture(const Image &image)
 {
     glGenTextures(1, &id);
     glBindTexture(GL_TEXTURE_2D, id);
@@ -389,7 +460,8 @@ Texture::Texture(Image &image)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, image.width, image.height, 0, GL_RGB, GL_UNSIGNED_BYTE, image.data);
+    GLenum format = image.channels == 4 ? GL_RGBA : GL_RGB;
+    glTexImage2D(GL_TEXTURE_2D, 0, format, image.width, image.height, 0, format, GL_UNSIGNED_BYTE, image.data);
 }
 
 Texture::~Texture()
@@ -399,40 +471,44 @@ Texture::~Texture()
     glDeleteTextures(1, &id);
 }
 
-void debugPrintMesh(MeshData &mesh)
+PathMesh::PathMesh(MeshData &mesh_data)
 {
-    int stride = vertexStride(mesh)/sizeof(GLfloat);
-    int cur = 0;
-    for (auto v : mesh.vertices)
+    assert(mesh_data.primitive_type == MeshPrimitiveType::LINE_SEGMENTS);
+    data = std::move(mesh_data);
+    face_pairs.reserve(mesh_data.indices.size()/2);
+    // Assumption: faces are triangles.
+    // In the future this could be a parameter.
+    int face_sides = 3;
+    int indices_per_face = 2*face_sides;
+    for (int i = 0; i < mesh_data.indices.size(); i += indices_per_face)
     {
-        std::cout << v << " ";
-        cur++;
-        if (cur == stride)
+        int face_index = i/indices_per_face;
+        int line_beginning_index = i/face_sides;
+        for (int line = line_beginning_index; i < face_sides; i++)
         {
-            std::cout << " | ";
-            cur = 0;
-        }
+            if (face_pairs[line].first == 0)
+                face_pairs[line].first = face_index;
+            else if (face_pairs[line].second == 0)
+                face_pairs[line].second = face_index;
+            else assert(false); // three faces sharing a line? not possible.
+        };
     }
-    std::cout << "\n";
-    for (auto i : mesh.indices)
-        std::cout << i << " ";
-    std::cout << "\n";
 }
 
 int main(int argc, char *argv[])
 {
-    auto parseObjResult = loadOBJ(loadFile("res/models/skull.obj"));
+    auto parseObjResult = loadOBJ(loadFile("res/models/just_pyramid_ball.obj"));
     if (!parseObjResult.success)
     {
         std::cerr << parseObjResult.error << "\n";
         return EXIT_FAILURE;
     }
-    MeshData mesh_data = parseObjResult.obj;
+    MeshData model_mesh_data = parseObjResult.obj;
+    Image model_texture_image {"chinese_box.gif"};
+    Image floor_texture_image {"slimy_vines.png"};
 
-    auto image = Image{"skull.png"};
-
-    int screen_width = 1200; 
-    int screen_height = 800;
+    int screen_width = 1600; 
+    int screen_height = 900;
 
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_AUDIO);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
@@ -471,11 +547,13 @@ int main(int argc, char *argv[])
         std::cerr << "OpenGL error: " << gluErrorString(error) << "\n";
 
     glEnable(GL_DEPTH_TEST);
-    // glEnable(GL_CULL_FACE);
+    glEnable(GL_CULL_FACE);
 
     Shader shader;
     {
-        auto shaderResult = makeShader(loadFile("res/shaders/test.vert"), loadFile("res/shaders/test.frag"));
+        auto shaderResult = makeShader(
+            loadFile("res/shaders/test.vert"),
+            loadFile("res/shaders/test.frag"));
         if (!shaderResult.success)
         {
             std::cerr << "Shader error: " << shaderResult.error << "\n";
@@ -483,62 +561,123 @@ int main(int argc, char *argv[])
         }
         shader = std::move(shaderResult.obj);
     }
+
     initTransformationMatrices(shader);
-    GLint texture_loc = glGetUniformLocation(shader.id, "tex");
+    setHasTexture(shader);
 
-    Mesh mesh {mesh_data};
+    Mesh model_mesh {model_mesh_data};
+    Texture model_texture {model_texture_image};
 
-    auto texture = Texture{image};
+    Mesh floor_mesh {QUAD_MESH_DATA};
+    Texture floor_texture {floor_texture_image};
 
-    float rotation = 0;
-    float rotation_speed = 2.f;
-    float z_position = -5;
-    float x_position = 0;
+    glm::vec3 model_pos {0.f, 0.f, -1.f};
+    float model_rotation = 0, model_rotation_speed = -1.f;
+    glm::vec3 eye_pos {0.f, 0.f, 2.f};
+    glm::vec2 eye_vel {0.f, 0.f};
+    glm::vec3 eye_look_direction {0.f, 0.f, -1.f};
+    float eye_pitch = 0, eye_yaw = 90;
+    float eye_speed = 0.5f;
+    bool w_down = false, a_down = false, s_down = false, d_down = false;
+    int prev_mouse_x = screen_width/2, prev_mouse_y = screen_height/2;
     float previous_time = SDL_GetTicks() / 1000.f;
     float dt = 0;
     bool wireframe = false;
+    bool running = true;
     SDL_Event event;
-    while (true)
-    {
-        if (SDL_PollEvent(&event))
-        {
-            if (event.type == SDL_QUIT) break;
-            else if (event.type == SDL_MOUSEMOTION)
-            {
-                z_position = ((float)event.motion.y / screen_height) * -90;
-                x_position = (event.motion.x - screen_width/2) / 50.f;
-            }
-            else if (event.type == SDL_KEYDOWN)
-            {
-                auto key = event.key.keysym.sym;
-                if (key == SDLK_w)
-                    wireframe = !wireframe;
-                else if (key == SDLK_ESCAPE) break;
-            }
-        }
 
+    while (running)
+    {
         float now = SDL_GetTicks() / 1000.f;
         dt = now - previous_time;
         previous_time = now;
 
-        rotation += rotation_speed * dt;
+        while (SDL_PollEvent(&event))
+        {
+            if (event.type == SDL_QUIT) running = false;
+            else if (event.type == SDL_MOUSEMOTION)
+            {
+                int mouse_movement_x = event.motion.x - prev_mouse_x;
+                int mouse_movement_y = event.motion.y - prev_mouse_y;
+                prev_mouse_x = event.motion.x;
+                prev_mouse_y = event.motion.y;
+                eye_yaw += mouse_movement_x/4.f;
+                eye_pitch += -mouse_movement_y/6.f;
+                if (eye_pitch > 89.f)  eye_pitch = 89.f;
+                if (eye_pitch < -89.f) eye_pitch = -89.f;
+                eye_look_direction.x =
+                    glm::cos(glm::radians(eye_pitch))
+                    * glm::cos(glm::radians(eye_yaw));
+                eye_look_direction.y = glm::sin(glm::radians(eye_pitch));
+                eye_look_direction.z =
+                    glm::cos(glm::radians(eye_pitch))
+                    * glm::sin(glm::radians(eye_yaw));
+                eye_look_direction = glm::normalize(eye_look_direction);
+            }
+            else if (event.type == SDL_KEYDOWN)
+            {
+                auto key = event.key.keysym.sym;
+                if (key == SDLK_ESCAPE) running = false;
+                else if (key == SDLK_m) wireframe = !wireframe;
+                else if (key == SDLK_w) w_down = true;
+                else if (key == SDLK_a) a_down = true;
+                else if (key == SDLK_s) s_down = true;
+                else if (key == SDLK_d) d_down = true;
+            }
+            else if (event.type == SDL_KEYUP)
+            {
+                auto key = event.key.keysym.sym;
+                if      (key == SDLK_w) w_down = false;
+                else if (key == SDLK_a) a_down = false;
+                else if (key == SDLK_s) s_down = false;
+                else if (key == SDLK_d) d_down = false;
+            }
+        }
 
-        glClearColor(0.f, 0.f, 0.f, 1.f);
+        model_rotation += model_rotation_speed * dt;
+
+        // Eye control 
+        {
+            glm::vec2 eye_accel {0.f, 0.f};
+            if (w_down) eye_accel.y =  1;
+            if (a_down) eye_accel.x = -1;
+            if (s_down) eye_accel.y = -1;
+            if (d_down) eye_accel.x =  1;
+            if (eye_accel != glm::zero<glm::vec2>())
+                eye_accel = glm::normalize(eye_accel) * eye_speed;
+            glm::vec3 eye_forward = eye_look_direction;
+            eye_forward.y = 0;
+            eye_forward = glm::normalize(eye_forward);
+            eye_accel += -6.0f*eye_vel;
+            eye_vel += eye_accel*dt;
+            glm::vec3 world_space_movement =
+                eye_vel.y * eye_forward +
+                eye_vel.x * glm::normalize(glm::cross(eye_forward, glm::vec3(0.f, 1.f, 0.f)));
+            eye_pos += world_space_movement;
+        }
+
+        glClearColor(0.9f, 0.9f, 0.9f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glLineWidth(2);
         glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
 
-        glUseProgram(shader.id);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, texture.id);
-        glUniform1i(texture_loc, 0);
-        glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(x_position, -0.7f, z_position));
-        model = glm::scale(model, glm::vec3(0.02f, 0.02f, 0.02f));
-        model = glm::rotate(model, (float)3.14159/5, glm::vec3(1.f, 0.f, 0.f));
-        model = glm::rotate(model, rotation, glm::vec3(0.f, 1.f, 0.f));
-        setModelTransform(shader, model);
-        setCameraTransform(shader, glm::lookAt(glm::vec3(0.f, 0.f, 2.f), glm::vec3(0.f, 0.f, 1.f), glm::vec3(0.f, 1.f, 0.f)));
+        use(shader);
+        setCameraTransform(shader, glm::lookAt(eye_pos, eye_pos + eye_look_direction, glm::vec3(0.f, 1.f, 0.f)));
         setProjectionTransform(shader, glm::perspective(45.f, (float)screen_width / screen_height, 0.1f, 100.f));
-        draw(mesh);
+
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), model_pos);
+        model = glm::scale(model, glm::vec3(3.f, 3.f, 3.f));
+        // model = glm::rotate(model, model_rotation, glm::vec3(0.f, 1.f, 0.f));
+        setModelTransform(shader, model);
+        glEnable(GL_CULL_FACE);
+        draw(model_mesh, model_texture);
+
+        model = glm::translate(glm::mat4(1.0f), glm::vec3(0.f, -1.5f, 0.f));
+        model = glm::scale(model, glm::vec3(8.f, 8.f, 8.f));
+        model = glm::rotate(model, glm::radians(90.f), glm::vec3(1.f, 0.f, 0.f));
+        setModelTransform(shader, model);
+        glDisable(GL_CULL_FACE);
+        draw(floor_mesh, floor_texture);
 
         SDL_GL_SwapWindow(window);
 

@@ -56,11 +56,14 @@ enum MeshLayout
     NORM = 1 << 2,
 };
 
+enum class MeshPrimitiveType { TRIANGLES, LINE_SEGMENTS };
+
 struct MeshData
 {
     std::vector<GLfloat> vertices;
     std::vector<GLuint> indices;
     char layout;
+    MeshPrimitiveType primitive_type;
 };
 
 struct Mesh
@@ -69,7 +72,7 @@ struct Mesh
     int num_vertices = 0;
     char layout = MeshLayout::NONE;
 
-    Mesh(MeshData& mesh_data);
+    Mesh(const MeshData& mesh_data);
 
     Mesh(const Mesh &other) = delete;
     Mesh& operator=(const Mesh &other) = delete;
@@ -139,6 +142,7 @@ struct Image
     unsigned char *data;
     int width;
     int height;
+    int channels;
 
     Image(const char *filename);
 };
@@ -147,7 +151,7 @@ struct Texture
 {
     GLuint id;
 
-    Texture(Image &image);
+    Texture(const Image &image);
 
     Texture(const Texture &other) = delete;
     Texture& operator=(const Texture &other) = delete;
@@ -166,4 +170,12 @@ struct Texture
     }
 
     ~Texture();
+};
+
+struct PathMesh
+{
+    MeshData data;
+    std::vector<std::pair<int, int>> face_pairs;
+
+    PathMesh(MeshData &mesh_data);
 };
