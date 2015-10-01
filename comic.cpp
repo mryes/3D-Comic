@@ -54,72 +54,79 @@ void do_times(int times, std::function<void(int)> function)
     for (int i = 0; i < times; i++) function(i);
 }
 
-GLsizei vertexStride(const MeshData &mesh)
+GLsizei vertexStride(const MeshData &mesh_data)
 {
-    if (mesh.layout == MeshLayout::NONE) return 0;
-    assert(mesh.layout & MeshLayout::POS);
+    if (mesh_data.layout == MeshLayout::NONE) return 0;
+    assert(mesh_data.layout & MeshLayout::POS);
     GLsizei size = sizeof(GLfloat) * 3;
-    if (mesh.layout & MeshLayout::TEX)  size += sizeof(GLfloat) * 2;
-    if (mesh.layout & MeshLayout::NORM) size += sizeof(GLfloat) * 3;
+    if (mesh_data.layout & MeshLayout::TEX)  size += sizeof(GLfloat) * 2;
+    if (mesh_data.layout & MeshLayout::NORM) size += sizeof(GLfloat) * 3;
     return size;
 }
 
-/*int indexStride(const MeshData &mesh)
+int indexStride(const MeshData &mesh_data)
 {
-    if (mesh.layout == MeshLayout::NONE) return 0;
-    assert(mesh.layout & MeshLayout::POS);
-    GLsizei size = 3;
-    if (mesh.layout & MeshLayout::TEX)  size += 2;
-    if (mesh.layout & MeshLayout::NORM) size += 3;
-    return size;
-}*/
+    int stride = 1;
+    if (mesh_data.layout & MeshLayout::TEX)  stride++;
+    if (mesh_data.layout & MeshLayout::NORM) stride++;
+    return stride;
+}
 
-Mesh::Mesh(const MeshData &mesh_data)
+const GLfloat *dataPointerFromVertexNumber(const MeshData &mesh_data, int vert_num)
 {
-    layout = mesh_data.layout;
-    num_vertices = static_cast<int>(mesh_data.indices.size());
-    glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
-    glGenBuffers(1, &vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(
-        GL_ARRAY_BUFFER,
-        sizeof(GLfloat) * mesh_data.vertices.size(),
-        &mesh_data.vertices[0],
-        GL_STATIC_DRAW);
-    GLuint stride = vertexStride(mesh_data);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (char*)0);
-    int top_attr_index = 1;
+    int vert_index = mesh_data.indices[vert_num] * vertexStride(mesh_data)/sizeof(GLfloat);
+    return &mesh_data.vertices[vert_index];
+}
+
+Vertex getVertex(const MeshData &mesh_data, int vert_num)
+{
+    const GLfloat *component = dataPointerFromVertexNumber(mesh_data, vert_num);
+    Vertex vertex;
+    vertex.position = glm::vec3(component[0], component[1], component[2]);
     if (mesh_data.layout & MeshLayout::TEX)
-    {
-        glEnableVertexAttribArray(top_attr_index);
-        glVertexAttribPointer(top_attr_index, 2, GL_FLOAT, GL_FALSE, stride, (GLvoid*)(3*sizeof(GLfloat)));
-        top_attr_index++;
-    }
+        vertex.texcoord = glm::vec2(component[3], component[4]);
     if (mesh_data.layout & MeshLayout::NORM)
-    {
-        glEnableVertexAttribArray(top_attr_index);
-        glVertexAttribPointer(top_attr_index, 3, GL_FLOAT, GL_FALSE, stride, (GLvoid*)(5*sizeof(GLfloat)));
-    }
-    glGenBuffers(1, &ibo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
-    glBufferData(
-        GL_ELEMENT_ARRAY_BUFFER,
-        sizeof(GLuint) * mesh_data.indices.size(),
-        &mesh_data.indices[0],
-        GL_STATIC_DRAW);
-    glBindVertexArray(0);
+        vertex.normal = glm::vec3(component[5], component[6], component[7]);
+    return vertex;
 }
 
-Mesh::~Mesh()
+int verticesInFace(const MeshData &mesh_data)
 {
-    if (!isContextActive()) return;
-    std::cout << "What!\n";
-    if (vao == 0 || vbo == 0 || ibo == 0) return;
-    glDeleteVertexArrays(1, &vao);
-    glDeleteBuffers(1, &vbo);
-    glDeleteBuffers(1, &ibo);
+    return mesh_data.primitive_type == MeshPrimitiveType::TRIANGLES ? 3 : 6;
+}
+
+glm::vec3 positionOnFace(const MeshData &mesh_data, int face, int rel_point)
+{
+    assert(rel_point < verticesInFace(mesh_data));
+    int face_point = face * verticesInFace(mesh_data);
+    int point = face_point + rel_point*2;
+    return getVertex(mesh_data, point).position;
+}
+
+glm::vec3 centerPointOnFace(const MeshData &mesh_data, int face)
+{
+    int points_in_face = verticesInFace(mesh_data)/2;
+    glm::vec3 sum {0};
+    for (int i = 0; i < points_in_face; i++)
+        sum += positionOnFace(mesh_data, face, i);
+    return sum / static_cast<float>(points_in_face);
+}
+
+glm::vec3 normalOnFace(const MeshData &mesh_data, int face, int rel_point)
+{
+    assert(rel_point < verticesInFace(mesh_data));
+    int face_point = face * verticesInFace(mesh_data);
+    int point = face_point + rel_point*2;
+    return getVertex(mesh_data, point).normal;
+}
+
+glm::vec3 averageNormalOnFace(const MeshData &mesh_data, int face)
+{
+    int points_in_face = verticesInFace(mesh_data)/2;
+    glm::vec3 sum {0};
+    for (int i = 0; i < points_in_face; i++)
+        sum += normalOnFace(mesh_data, face, i);
+    return sum / static_cast<float>(points_in_face);
 }
 
 const MeshData QUAD_MESH_DATA
@@ -139,6 +146,23 @@ const MeshData QUAD_MESH_DATA
 
     POS | TEX
 };
+
+MeshData normalsMeshData(const MeshData &mesh_data)
+{
+    int number_of_faces = mesh_data.indices.size()/verticesInFace(mesh_data);
+    MeshData normals_data;
+    normals_data.primitive_type = MeshPrimitiveType::LINE_SEGMENTS;
+    normals_data.layout = MeshLayout::POS;
+    normals_data.vertices.reserve((3 + 3) * number_of_faces);
+    std::vector<GLfloat> &data = normals_data.vertices;
+    for (int f = 0; f < number_of_faces; f++)
+    {
+        glm::vec3 start = centerPointOnFace(mesh_data, f);
+        glm::vec3 end = start + averageNormalOnFace(mesh_data, f);
+        data.insert(data.end(), {start.x, start.y, start.z, end.x, end.y, end.z});
+    }
+    return normals_data;
+}
 
 Result<MeshData> loadOBJ(
     std::string obj_text_contents,
@@ -294,7 +318,8 @@ Result<MeshData> loadOBJ(
                 }
                 else // line segments
                 {
-                    if (face_indices > 2)
+                    if (face_indices <= 2) mesh.indices.push_back(cur_index);
+                    else 
                     {
                         mesh.indices.push_back(*(mesh.indices.end() - 1));
                         mesh.indices.push_back(cur_index);
@@ -303,7 +328,7 @@ Result<MeshData> loadOBJ(
                     {
                         // Close polygon
                         mesh.indices.push_back(*(mesh.indices.end() - 1));
-                        mesh.indices.push_back(*(mesh.indices.end() - face_indices));
+                        mesh.indices.push_back(*(mesh.indices.end() - (face_indices*2 - 1)));
                     }
                 }
             }
@@ -313,6 +338,54 @@ Result<MeshData> loadOBJ(
     }
 
     return successfulResult(std::move(mesh));
+}
+
+Mesh::Mesh(const MeshData &mesh_data)
+{
+    layout = mesh_data.layout;
+    num_vertices = static_cast<int>(mesh_data.indices.size());
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        sizeof(GLfloat) * mesh_data.vertices.size(),
+        &mesh_data.vertices[0],
+        GL_STATIC_DRAW);
+    GLuint stride = vertexStride(mesh_data);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (char*)0);
+    int top_attr_index = 1;
+    if (mesh_data.layout & MeshLayout::TEX)
+    {
+        glEnableVertexAttribArray(top_attr_index);
+        glVertexAttribPointer(top_attr_index, 2, GL_FLOAT, GL_FALSE, stride, (GLvoid*)(3*sizeof(GLfloat)));
+        top_attr_index++;
+    }
+    if (mesh_data.layout & MeshLayout::NORM)
+    {
+        glEnableVertexAttribArray(top_attr_index);
+        glVertexAttribPointer(top_attr_index, 3, GL_FLOAT, GL_FALSE, stride, (GLvoid*)(5*sizeof(GLfloat)));
+    }
+    glGenBuffers(1, &ibo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+    glBufferData(
+        GL_ELEMENT_ARRAY_BUFFER,
+        sizeof(GLuint) * mesh_data.indices.size(),
+        &mesh_data.indices[0],
+        GL_STATIC_DRAW);
+    glBindVertexArray(0);
+}
+
+Mesh::~Mesh()
+{
+    if (!isContextActive()) return;
+    std::cout << "What!\n";
+    if (vao == 0 || vbo == 0 || ibo == 0) return;
+    glDeleteVertexArrays(1, &vao);
+    glDeleteBuffers(1, &vbo);
+    glDeleteBuffers(1, &ibo);
 }
 
 void draw(const Mesh &mesh)
@@ -414,17 +487,27 @@ void initTransformationMatrices(Shader &shader)
 
 void setModelTransform(const Shader &shader, glm::mat4 &mat)
 {
+    use(shader);
     glUniformMatrix4fv(shader._model, 1, GL_FALSE, glm::value_ptr(mat));
 }
 
 void setCameraTransform(const Shader &shader, glm::mat4 &mat)
 {
+    use(shader);
     glUniformMatrix4fv(shader._view, 1, GL_FALSE, glm::value_ptr(mat));
 }
 
 void setProjectionTransform(const Shader &shader, glm::mat4 mat)
 {
+    use(shader);
     glUniformMatrix4fv(shader._projection, 1, GL_FALSE, glm::value_ptr(mat));
+}
+
+void setColorUniform(const Shader &shader, const char *name, glm::vec3 color)
+{
+    GLint loc = glGetUniformLocation(shader.id, name);
+    use(shader);
+    glUniform3fv(loc, 1, glm::value_ptr(color));
 }
 
 void setHasTexture(Shader &shader)
@@ -495,6 +578,18 @@ PathMesh::PathMesh(MeshData &mesh_data)
     }
 }
 
+void offset(PathMesh &path_mesh, glm::vec3 amount)
+{
+    auto &data = path_mesh.data.vertices;
+    auto stride = vertexStride(path_mesh.data);
+    for (int i = 0; i < data.size(); i += stride)
+    {
+        data[i+0] += amount.x;
+        data[i+1] += amount.y;
+        data[i+2] += amount.z;
+    }
+}
+
 int main(int argc, char *argv[])
 {
     auto parseObjResult = loadOBJ(loadFile("res/models/just_pyramid_ball.obj"));
@@ -504,6 +599,16 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
     MeshData model_mesh_data = parseObjResult.obj;
+
+    parseObjResult = loadOBJ(loadFile("res/models/path.obj"), MeshPrimitiveType::LINE_SEGMENTS);
+    if (!parseObjResult.success)
+    {
+        std::cerr << parseObjResult.error << "\n";
+        return EXIT_FAILURE;
+    }
+    PathMesh path_mesh {parseObjResult.obj};
+    MeshData normals_mesh_data = normalsMeshData(path_mesh.data);
+
     Image model_texture_image {"chinese_box.gif"};
     Image floor_texture_image {"slimy_vines.png"};
 
@@ -563,6 +668,7 @@ int main(int argc, char *argv[])
     }
 
     initTransformationMatrices(shader);
+    setColorUniform(shader, "background_color", glm::vec3(1.f, 0.2f, 0.f));
     setHasTexture(shader);
 
     Mesh model_mesh {model_mesh_data};
@@ -571,13 +677,20 @@ int main(int argc, char *argv[])
     Mesh floor_mesh {QUAD_MESH_DATA};
     Texture floor_texture {floor_texture_image};
 
-    glm::vec3 model_pos {0.f, 0.f, -1.f};
+    Mesh path_display_mesh {path_mesh.data};
+
+    Mesh normals_mesh {normals_mesh_data};
+
+    glm::vec3 model_pos {0.f, 1.f, -1.f};
     float model_rotation = 0, model_rotation_speed = -1.f;
-    glm::vec3 eye_pos {0.f, 0.f, 2.f};
+
+    glm::vec3 eye_pos = positionOnFace(path_mesh.data, 20, 4);
     glm::vec2 eye_vel {0.f, 0.f};
     glm::vec3 eye_look_direction {0.f, 0.f, -1.f};
+    glm::vec3 eye_raised {0.f, 0.2f, 0.f};
     float eye_pitch = 0, eye_yaw = 90;
     float eye_speed = 0.5f;
+
     bool w_down = false, a_down = false, s_down = false, d_down = false;
     int prev_mouse_x = screen_width/2, prev_mouse_y = screen_height/2;
     float previous_time = SDL_GetTicks() / 1000.f;
@@ -662,7 +775,7 @@ int main(int argc, char *argv[])
         glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
 
         use(shader);
-        setCameraTransform(shader, glm::lookAt(eye_pos, eye_pos + eye_look_direction, glm::vec3(0.f, 1.f, 0.f)));
+        setCameraTransform(shader, glm::lookAt(eye_pos + eye_raised, eye_pos + eye_raised + eye_look_direction, glm::vec3(0.f, 1.f, 0.f)));
         setProjectionTransform(shader, glm::perspective(45.f, (float)screen_width / screen_height, 0.1f, 100.f));
 
         glm::mat4 model = glm::translate(glm::mat4(1.0f), model_pos);
@@ -672,12 +785,14 @@ int main(int argc, char *argv[])
         glEnable(GL_CULL_FACE);
         draw(model_mesh, model_texture);
 
-        model = glm::translate(glm::mat4(1.0f), glm::vec3(0.f, -1.5f, 0.f));
-        model = glm::scale(model, glm::vec3(8.f, 8.f, 8.f));
-        model = glm::rotate(model, glm::radians(90.f), glm::vec3(1.f, 0.f, 0.f));
-        setModelTransform(shader, model);
+        setModelTransform(shader, glm::mat4(1.0f));
         glDisable(GL_CULL_FACE);
-        draw(floor_mesh, floor_texture);
+        bind(floor_texture);
+        glBindVertexArray(path_display_mesh.vao);
+        glDrawElements(GL_LINES, static_cast<GLsizei>(path_display_mesh.num_vertices), GL_UNSIGNED_INT, 0);
+
+        glBindVertexArray(normals_mesh.vao);
+        glDrawArrays(GL_LINES, 0, normals_mesh_data.vertices.size()/2);
 
         SDL_GL_SwapWindow(window);
 

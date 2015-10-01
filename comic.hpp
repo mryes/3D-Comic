@@ -66,6 +66,13 @@ struct MeshData
     MeshPrimitiveType primitive_type;
 };
 
+struct Vertex
+{
+    glm::vec3 position;
+    glm::vec2 texcoord;
+    glm::vec3 normal;
+};
+
 struct Mesh
 {
     GLuint vao = 0, vbo = 0, ibo = 0;
